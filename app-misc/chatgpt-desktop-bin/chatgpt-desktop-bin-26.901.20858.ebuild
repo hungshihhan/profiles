@@ -80,6 +80,25 @@ src_prepare() {
 	# they neither pull Qt into RDEPEND nor trip the NEEDED QA check.
 	find "${S}${APPDIR}" -maxdepth 1 -name 'libqt*_shim.so' -delete || die
 
+	# npm native modules (node-hid, serialport, classic-level, ...) ship
+	# prebuilds for every platform. Keep only linux-<arch>/glibc; the rest
+	# (android, other arches, musl) can never load here and only trigger
+	# the unresolved-soname QA check.
+	local node_arch
+	case ${ARCH} in
+		amd64) node_arch=x64 ;;
+		arm64) node_arch=arm64 ;;
+		*) die "unsupported ARCH=${ARCH}" ;;
+	esac
+	local dir
+	while IFS= read -r -d '' dir; do
+		case ${dir##*/} in
+			linux-${node_arch}|*-linux-${node_arch}) ;;
+			*) rm -r "${dir}" || die ;;
+		esac
+	done < <(find "${S}${APPDIR}" -type d -path '*/prebuilds/*' -prune -print0)
+	find "${S}${APPDIR}" -path '*/prebuilds/*' -name '*musl*' -delete || die
+
 	# Point every launcher at the wrapper in /usr/bin (see files/).
 	local desktop
 	while IFS= read -r -d '' desktop; do
