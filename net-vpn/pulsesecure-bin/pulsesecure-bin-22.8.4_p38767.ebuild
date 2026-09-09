@@ -191,6 +191,27 @@ pkg_postinst() {
 		ewarn "  setfacl -d -m g::r,o::r ${statedir}"
 	fi
 
+	# The client's TLS verifyTrust() only reads /etc/ssl/certs/ca-certificates.crt
+	# when it detects Debian/Ubuntu (via PRETTY_NAME in /etc/os-release); on every
+	# other distro it hardcodes the Red Hat bundle path, which Gentoo never
+	# creates. Without it X509_STORE_load_locations() fails ("Failed to load CA
+	# certs. verifyTrust failed") and every gateway looks untrusted. Provide that
+	# path as a symlink to the real bundle. Guarded so we never clobber a file
+	# managed by anything else (e.g. a p11-kit-based setup).
+	local rhbundle=${EROOT}/etc/pki/ca-trust/extracted/openssl/ca-bundle.trust.crt
+	if [[ ! -e ${rhbundle} && ! -L ${rhbundle} ]]; then
+		if mkdir -p "${rhbundle%/*}" &&
+			ln -s ../../../../ssl/certs/ca-certificates.crt "${rhbundle}"; then
+			elog "Linked the CA bundle path the client expects on non-Debian systems:"
+			elog "  ${rhbundle#${EROOT}} -> /etc/ssl/certs/ca-certificates.crt"
+			elog "Without it the client rejects every gateway as untrusted."
+		else
+			ewarn "Could not create ${rhbundle#${EROOT}}."
+			ewarn "The client will reject gateways as untrusted until it exists;"
+			ewarn "create it by hand as a symlink to /etc/ssl/certs/ca-certificates.crt."
+		fi
+	fi
+
 	elog "Enable and start the daemon before launching the client:"
 	elog "  systemctl enable --now pulsesecure.service"
 	elog
@@ -231,6 +252,15 @@ pkg_postrm() {
 	xdg_pkg_postrm
 
 	if [[ -z ${REPLACED_BY_VERSION} ]]; then
+		# Drop the CA-bundle symlink from pkg_postinst, but only if it is still
+		# the symlink we created (never a real bundle the admin put there).
+		local rhbundle=${EROOT}/etc/pki/ca-trust/extracted/openssl/ca-bundle.trust.crt
+		if [[ -L ${rhbundle} &&
+			$(readlink "${rhbundle}") == */ssl/certs/ca-certificates.crt ]]; then
+			rm -f "${rhbundle}"
+			rmdir -p --ignore-fail-on-non-empty "${rhbundle%/*}" 2>/dev/null
+		fi
+
 		elog "Connection settings in /var/lib/pulsesecure and any CEF runtime"
 		elog "the client downloaded itself into ${APPDIR}/lib/cefRuntime"
 		elog "were left in place."
