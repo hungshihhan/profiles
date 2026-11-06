@@ -28,6 +28,7 @@ S="${WORKDIR}"
 LICENSE="all-rights-reserved"
 SLOT="0"
 KEYWORDS="-* ~amd64 ~arm64"
+IUSE="+wayland"
 # Proprietary binary: no redistribution, nothing to strip or test.
 RESTRICT="bindist mirror strip test"
 
@@ -67,13 +68,13 @@ RDEPEND="
 # alternative (gvfs | trash-cli | libglib2.0-bin) is satisfied by glib's gio.
 RDEPEND+="
 	app-crypt/libsecret
-	dev-libs/wayland
 	sys-apps/util-linux
 	sys-apps/xdg-desktop-portal
 	x11-libs/libXtst
 	x11-libs/libdrm
 	x11-libs/libnotify
 	x11-misc/xdg-utils
+	wayland? ( dev-libs/wayland )
 "
 
 BDEPEND="$(unpacker_src_uri_depends)"
@@ -92,6 +93,13 @@ src_prepare() {
 	# instead, which Gentoo never runs. Keep the strip as a cheap guard
 	# against reintroduction.
 	rm -rf etc/apt etc/default usr/share/keyrings usr/share/lintian || die
+
+	# Point the desktop entry at the wrapper in /usr/bin (see files/),
+	# which injects the Wayland/IME flags and claude-desktop-flags.conf.
+	local desktop
+	while IFS= read -r -d '' desktop; do
+		sed -E -i "s|^Exec=\S*/?${MY_PN}\b|Exec=${MY_PN}|" "${desktop}" || die
+	done < <(find usr/share/applications -name '*.desktop' -print0)
 }
 
 src_install() {
@@ -108,6 +116,15 @@ src_install() {
 	# The deb payload mirrors the final filesystem layout.
 	dodir /
 	cp -a --no-preserve=ownership . "${ED}"/ || die "installing deb payload failed"
+
+	# Replace upstream's /usr/bin symlink with a wrapper that injects the
+	# Wayland/IME flags and ~/.config/claude-desktop-flags.conf (see files/).
+	rm "${ED}"/usr/bin/${MY_PN} || die
+	sed \
+		-e "s|@APPDIR@|${EPREFIX}${APPDIR}|" \
+		-e "s|@WAYLAND@|$(usex wayland true false)|" \
+		"${FILESDIR}/${MY_PN}-launcher.sh" > "${T}/${MY_PN}" || die
+	dobin "${T}/${MY_PN}"
 
 	# Debian postinst equivalents (Gentoo never runs maintainer scripts).
 	# Shared-mime registration for .mcpb/.dxt/.skill; the xdg eclass
@@ -150,11 +167,16 @@ pkg_postinst() {
 	elog "Ubuntu 22.04+/Debian 12+. It is a self-contained Electron app and"
 	elog "generally runs fine elsewhere, but you are off the support map."
 	elog
-	elog "On Sway/Wayland, run with native Wayland instead of XWayland:"
-	elog "  claude-desktop --ozone-platform=wayland --enable-features=UseOzonePlatform,WaylandWindowDecorations"
-	elog "or export ELECTRON_OZONE_PLATFORM_HINT=auto. The Quick Entry global"
-	elog "hotkey on Wayland requires the GlobalShortcuts portal"
-	elog "(xdg-desktop-portal-wlr does not implement it; hyprland/kde portals do)."
+	elog "Extra Chromium/Electron flags can be put one per line in"
+	elog "  \${XDG_CONFIG_HOME:-~/.config}/${MY_PN}-flags.conf"
+	if use wayland; then
+		elog "USE=wayland launches natively on Wayland (--ozone-platform-hint=auto)"
+		elog "with window decorations and Wayland IME enabled; export"
+		elog "CLAUDE_DESKTOP_NO_WAYLAND_FLAGS=1 to opt out at runtime."
+	fi
+	elog "The Quick Entry global hotkey on Wayland requires the GlobalShortcuts"
+	elog "portal (xdg-desktop-portal-wlr does not implement it; hyprland/kde"
+	elog "portals do)."
 	elog
 	elog "Cowork's sandboxed execution runs a QEMU/KVM guest. It needs /dev/kvm"
 	elog "and /dev/vhost-vsock, so load the vhost_vsock module (autoload with:"
